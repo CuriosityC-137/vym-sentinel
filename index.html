@@ -519,10 +519,10 @@ setInterval(()=>{
 // FETCH
 // ══════════════════════════════════════════════
 async function yahooFetch(sym,range='1y'){
-  const url=`https://api.allorigins.win/get?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=${range}`)}`;
+  const url=`https://corsproxy.io/?';
   const res=await fetch(url,{signal:AbortSignal.timeout(12000)});
   const outer=await res.json();
-  return JSON.parse(outer.contents);
+  return JSON.parse(outer);
 }
 
 async function fetchAll(){
