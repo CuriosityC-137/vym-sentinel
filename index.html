@@ -519,10 +519,11 @@ setInterval(()=>{
 // FETCH
 // ══════════════════════════════════════════════
 async function yahooFetch(sym,range='1y'){
-  const url=`https://corsproxy.io/?';
+  const target=encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=${range}`);
+  const url=`https://corsproxy.io/?url=${target}`;
   const res=await fetch(url,{signal:AbortSignal.timeout(12000)});
-  const outer=await res.json();
-  return JSON.parse(outer);
+  if(!res.ok) throw new Error('Proxy fetch failed: '+res.status);
+  return await res.json();
 }
 
 async function fetchAll(){
