@@ -35,7 +35,7 @@ jobs:
         run: pip install requests
 
       - name: Fetch data (fails loudly if a source is broken)
-        run: python scripts/fetch_data.py
+        run: python Scripts/fetch_data.py
 
       - name: Commit data.json if it changed
         run: |
