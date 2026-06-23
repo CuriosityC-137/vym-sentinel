@@ -278,7 +278,7 @@ const STOCKS = [
   { sym:'XOM',  name:'ExxonMobil',          stop:0.08, bench:'VOO', type:'stock' },
 ];
 const BENCH_SYMS = ['VOO','QQQ'];
-const CFG = { refreshMs: 300_000, proxyBase:'https://api.allorigins.win/get?url=' };
+const CFG = { refreshMs: 300_000, dataUrl:'data.json' }; // same-origin JSON written by GitHub Action — no proxy, no CORS
 
 // ══════════════════════════════════════════════════════════════
 // MANUAL EVENTS (global)
@@ -321,16 +321,20 @@ updateClock();
 // ══════════════════════════════════════════════════════════════
 // FETCH helpers
 // ══════════════════════════════════════════════════════════════
-async function yahooFetch(sym, range='1y', interval='1d'){
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=${interval}&range=${range}`;
-  const proxy = CFG.proxyBase + encodeURIComponent(url);
-  const r = await fetch(proxy);
+let _dataCache = null;
+async function loadData(){
+  // Same-origin JSON, produced server-side by the GitHub Action.
+  // No CORS, no proxy, no Yahoo crumb — nothing third-party to break mid-session.
+  const r = await fetch(`${CFG.dataUrl}?t=${Date.now()}`, { cache:'no-store' });
+  if(!r.ok) throw new Error(`${CFG.dataUrl} HTTP ${r.status}`);
   const j = await r.json();
-  const d = JSON.parse(j.contents);
-  const q = d.chart.result[0];
-  const closes = q.indicators.quote[0].close;
-  const ts     = q.timestamp;
-  return closes.map((c,i)=>({t:ts[i]*1000, c})).filter(x=>x.c!=null);
+  if(!j || !j.symbols) throw new Error('data.json malformed');
+  _dataCache = j;
+  return j;
+}
+function histFor(payload, sym){
+  const e = payload.symbols[sym];
+  return (e && Array.isArray(e.hist)) ? e.hist : null;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -700,30 +704,44 @@ function toggleEvent(id){
 // FETCH ALL
 // ══════════════════════════════════════════════════════════════
 async function fetchAll(){
-  glog('Fetching market data…','info');
+  glog('Loading market data…','info');
 
-  // Fetch benchmarks first
-  for(const bsym of BENCH_SYMS){
-    try{
-      benchData[bsym] = await yahooFetch(bsym,'1y');
-      glog(`${bsym} benchmark loaded (${benchData[bsym].length} days)`,'ok');
-    } catch(e){ glog(`${bsym} fetch error: ${e.message}`,'err'); }
+  let payload;
+  try{
+    payload = await loadData();
+  } catch(e){
+    glog(`data load failed: ${e.message}`,'err');
+    glog('Keeping last values shown (offline/refresh pending).','warn');
+    return;
   }
 
-  // Fetch each stock
-  for(const cfg of STOCKS){
-    try{
-      const hist = await yahooFetch(cfg.sym,'1y');
-      const bHist = benchData[cfg.bench] || [];
-      const n = Math.min(hist.length, bHist.length);
-      const metrics = n>=30 ? calcMetrics(hist.slice(-n), bHist.slice(-n)) : null;
-      S[cfg.sym] = { hist, metrics, threat:null };
-      S[cfg.sym].threat = computeThreat(cfg.sym, hist, metrics);
-      renderStock(cfg.sym);
-      glog(`${cfg.sym} loaded · threat ${S[cfg.sym].threat.total}%`,'ok');
-    } catch(e){
-      glog(`${cfg.sym} error: ${e.message}`,'err');
+  // Benchmarks first
+  for(const bsym of BENCH_SYMS){
+    const hist = histFor(payload, bsym);
+    if(hist && hist.length){
+      benchData[bsym] = hist;
+      glog(`${bsym} benchmark loaded (${hist.length} days)`,'ok');
+    } else {
+      glog(`${bsym} missing in data.json`,'err');
     }
+  }
+
+  // Each tracked stock
+  for(const cfg of STOCKS){
+    const hist = histFor(payload, cfg.sym);
+    if(!hist || !hist.length){ glog(`${cfg.sym} missing in data.json`,'err'); continue; }
+    const bHist = benchData[cfg.bench] || [];
+    const n = Math.min(hist.length, bHist.length);
+    const metrics = n>=30 ? calcMetrics(hist.slice(-n), bHist.slice(-n)) : null;
+    S[cfg.sym] = { hist, metrics, threat:null };
+    S[cfg.sym].threat = computeThreat(cfg.sym, hist, metrics);
+    renderStock(cfg.sym);
+    glog(`${cfg.sym} loaded · threat ${S[cfg.sym].threat.total}%`,'ok');
+  }
+
+  if(payload.generated){
+    const age = Math.round((Date.now() - new Date(payload.generated).getTime())/60000);
+    glog(`Data: ${payload.source||'?'} · ${new Date(payload.generated).toLocaleString()} (${age} min ago)`,'info');
   }
 }
 

@@ -1,0 +1,50 @@
+name: Refresh market data
+
+# Server-side data refresh. Runs on GitHub's runners (no browser, no CORS),
+# fetches daily closes, and commits data.json ONLY on full success.
+# The PWA reads /vym-sentinel/data.json same-origin, so a flaky upstream can
+# never break the live page — at worst data.json is a little stale.
+
+on:
+  workflow_dispatch:        # <-- manual "Run workflow" button = your pre-deploy live test
+  schedule:
+    # Every 30 min, 13:00-22:00 UTC, Mon-Fri. Covers US market hours in both
+    # EST (14:30-21:00 UTC) and EDT (13:30-20:00 UTC), plus pre-open/post-close.
+    # NOTE: GitHub cron is best-effort and can run 5-15 min late or skip under
+    # load. Fine for a daily-bar threat model; not for second-by-second trading.
+    - cron: "*/30 13-22 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:                # don't let two runs race on the same commit
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install requests
+
+      - name: Fetch data (fails loudly if a source is broken)
+        run: python scripts/fetch_data.py
+
+      - name: Commit data.json if it changed
+        run: |
+          git config user.name  "sentinel-bot"
+          git config user.email "actions@github.com"
+          if git diff --quiet -- data.json; then
+            echo "No change in data.json — nothing to commit."
+          else
+            git add data.json
+            git commit -m "data: refresh $(date -u +'%Y-%m-%dT%H:%MZ')"
+            git push
+          fi
